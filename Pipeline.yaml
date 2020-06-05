@@ -1,0 +1,82 @@
+# Azure DevOps YAML pipeline
+# Schema/help: https://aka.ms/yaml
+
+trigger:
+- master
+
+pr:
+  branches:
+    include:
+      - '*'
+
+pool:
+  vmImage: windows-latest
+
+variables:
+- name: ModPath
+  value: $(Build.SourcesDirectory)\MyModule
+- name: PSScriptAnalyzerVersion
+  value: 1.19.0
+- name: LinterSettings
+  value: $(Build.SourcesDirectory)\PSScriptAnalyzerSettings.psd1
+- name: PesterVersion
+  value: 4.10.1
+- name: TestResultsFile
+  value: $(Build.ArtifactStagingDirectory)\MyModuleUnitTestResults.xml
+
+stages:
+- stage: Build
+  displayName: Lint and Test
+  jobs:
+    - job: Default
+      steps:
+        - task: PowerShell@2
+          name: Linter
+          displayName: Run PSScriptAnalyzer Linter
+          inputs:
+            targetType: filePath
+            filePath: $(Build.SourcesDirectory)\Pipeline\Invoke-LinterStep.ps1
+            arguments: -ModulePath $(ModPath) -LinterSettingsPath $(LinterSettings) -AnalyzerVersion $(PSScriptAnalyzerVersion)
+            errorActionPreference: stop
+            failOnStderr: true
+            pwsh: true
+        - task: PowerShell@2
+          name: UnitTests
+          displayName: Run Pester Unit Tests
+          inputs:
+            targetType: filePath
+            filePath: $(Build.SourcesDirectory)\Pipeline\Invoke-UnitTestsStep.ps1
+            arguments: -ModulePath $(ModPath) -PesterVersion $(PesterVersion) -TestResultsFilePath $(TestResultsFile)
+            errorActionPreference: stop
+            failOnStderr: true
+            pwsh: true
+        - task: PublishTestResults@2
+          name: TestResults
+          displayName: Publish Unit Test Results
+          condition: always()
+          inputs:
+            testResultsFormat: NUnit
+            testResultsFiles: $(TestResultsFile)
+
+- stage: Release
+  displayName: Package and Publish
+  condition: and(succeeded(), eq(variables['build.sourceBranch'], 'refs/heads/master'))
+  jobs: 
+    - job: Default
+      steps:
+        - task: CopyFiles@2
+          name: Package
+          displayName: Package Flat Files
+          inputs:
+            sourceFolder: $(ModPath)
+            contents: |
+              **
+              !Tests/**
+            targetFolder: $(Build.ArtifactStagingDirectory)\drop
+        - task: PublishBuildArtifacts@1
+          name: Publish
+          displayName: Publish Flat Files
+          inputs:
+            pathToPublish: $(Build.ArtifactStagingDirectory)\drop
+            artifactName: MyModule-Drop
+            publishLocation: Container
